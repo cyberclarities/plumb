@@ -7,7 +7,7 @@ After=network-online.target time-sync.target
 Type=oneshot
 User=plumb
 WorkingDirectory=/opt/plumb
-ExecStart=/opt/plumb/.venv/bin/python collector.py --env-file /opt/plumb/.env
+ExecStart=/opt/plumb/.venv/bin/python collector.py --env-file /opt/plumb/config/plumb.env
 # Hardening: the collector only reads its own directory, writes OUTPUT_DIR, and makes HTTPS calls.
 NoNewPrivileges=true
 ProtectSystem=strict

@@ -10,10 +10,12 @@ plus JSON snapshots.
 
 Works on any host: WP Engine, GoDaddy, a VPS, anything that serves WordPress.
 
-    python3 collector.py --env-file .env                 # normal run
-    python3 collector.py --demo                          # fake data, no network
-    python3 collector.py --new-secret acmecorp           # make a site secret
-    python3 collector.py --env-file .env --check acmecorp   # pull one site, print the result
+Usually run inside the Docker container (see README). Directly:
+
+    python3 collector.py --env-file config/plumb.env                   # normal run
+    python3 collector.py --demo                                        # fake data, no network
+    python3 collector.py --new-secret acmecorp                         # make a site secret
+    python3 collector.py --env-file config/plumb.env --check acmecorp  # pull one site, print the result
 """
 from __future__ import annotations
 
@@ -73,7 +75,7 @@ def env_bool(name: str, default: bool) -> bool:
 
 class Config:
     def __init__(self) -> None:
-        self.sites_file = pathlib.Path(os.path.expanduser(os.environ.get("SITES_FILE", str(HERE / "sites.json"))))
+        self.sites_file = pathlib.Path(os.path.expanduser(os.environ.get("SITES_FILE", str(HERE / "config" / "sites.json"))))
         self.output_dir = pathlib.Path(os.path.expanduser(os.environ.get("OUTPUT_DIR", str(HERE / "output"))))
         self.workers = int(os.environ.get("WORKERS", "8"))
         self.timeout = int(os.environ.get("REQUEST_TIMEOUT", "30"))
@@ -85,8 +87,8 @@ class Config:
 
 def load_sites(cfg: Config) -> list[dict]:
     if not cfg.sites_file.exists():
-        sys.exit(f"sites file not found: {cfg.sites_file} (copy sites.example.json)")
-    raw = json.loads(cfg.sites_file.read_text())
+        sys.exit(f"sites file not found: {cfg.sites_file} (copy config/sites.example.json to config/sites.json)")
+    raw = json.loads(cfg.sites_file.read_text(encoding="utf-8-sig"))  # utf-8-sig: Windows editors may add a BOM
     sites, seen = [], set()
     for i, s in enumerate(raw.get("sites", [])):
         name = s.get("name", "")
@@ -391,7 +393,7 @@ def evaluate_site(rec: dict, report: dict | None, core_latest: str, wporg, cfg: 
 # --------------------------------------------------------------------------- live run
 def collect_one(session, site: dict, cfg: Config) -> tuple[dict, dict | None]:
     rec = new_site_record(site)
-    secret = os.environ.get(site["secret_env"], "")
+    secret = os.environ.get(site["secret_env"], "").strip()  # tolerate Windows line endings
     t0 = time.time()
     report = None
     if len(secret) < 32:

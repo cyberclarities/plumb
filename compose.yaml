@@ -1,0 +1,44 @@
+# Plumb: start with  docker compose up -d --build
+# Works the same with Docker Desktop on macOS and Windows, and with Docker Engine on Linux.
+name: plumb
+
+services:
+  plumb:
+    build: .
+    image: plumb:local
+    container_name: plumb
+    restart: unless-stopped
+    init: true                       # forwards stop signals and reaps child processes
+
+    ports:
+      # Dashboard: https://<this computer>:6443/
+      # To allow only this computer to view it, use "127.0.0.1:6443:6443" instead.
+      - "6443:6443"
+
+    # Secrets and settings. Read by Docker on the host and never copied into the image.
+    env_file:
+      - path: ./config/plumb.env
+        required: true
+
+    volumes:
+      - ./config:/config:ro          # sites.json (and tls/cert.pem + tls/key.pem if you have a real certificate)
+      - plumb-data:/data             # dashboard, history snapshots, generated certificate
+
+    # Hardening: nothing in the container can be modified except /data and /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  plumb-data:

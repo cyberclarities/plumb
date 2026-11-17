@@ -1,4 +1,5 @@
-.env
+config/plumb.env
+config/tls/
 output/
 __pycache__/
 .venv/

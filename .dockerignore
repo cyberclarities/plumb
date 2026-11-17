@@ -1,0 +1,7 @@
+# Only the files the image needs get copied in; secrets and data never do.
+*
+!Dockerfile
+!requirements.txt
+!collector.py
+!dashboard_template.html
+!plumb_server.py
