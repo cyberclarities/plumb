@@ -1,0 +1,23 @@
+{
+  "sites": [
+    {
+      "name": "acmecorp",
+      "url": "https://www.acmecorp.org",
+      "group": "Acme Corp",
+      "environment": "production"
+    },
+    {
+      "name": "acmecorp-stg",
+      "url": "https://acmecorpstg.wpengine.com",
+      "group": "Acme Corp",
+      "environment": "staging"
+    },
+    {
+      "name": "harborchurch",
+      "url": "https://www.harborchurch.org",
+      "group": "Harbor Church",
+      "environment": "production",
+      "secret_env": "PLUMB_SECRET_HARBOR"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Plumb - WordPress version monitor (collector run)
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=plumb
+WorkingDirectory=/opt/plumb
+ExecStart=/opt/plumb/.venv/bin/python collector.py --env-file /opt/plumb/.env
+# Hardening: the collector only reads its own directory, writes OUTPUT_DIR, and makes HTTPS calls.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/plumb/output
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=1h

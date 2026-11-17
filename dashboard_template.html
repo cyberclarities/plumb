@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Plumb — WordPress Version Monitor</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f1;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #6e6d68;
+  --line: #e1e0d9;
+  --line-strong: #c3c2b7;
+  --hover: rgba(11,11,11,0.035);
+  --critical: #d03b3b;
+  --warning: #fab219;
+  --good: #0ca30c;
+  --neutral: #8a8984;
+  --critical-bg: rgba(208,59,59,0.10);
+  --warning-bg: rgba(250,178,25,0.16);
+  --good-bg: rgba(12,163,12,0.10);
+  --neutral-bg: rgba(138,137,132,0.14);
+  --accent: #2a78d6;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #9b9a94;
+    --line: #2c2c2a;
+    --line-strong: #383835;
+    --hover: rgba(255,255,255,0.04);
+    --critical-bg: rgba(208,59,59,0.20);
+    --warning-bg: rgba(250,178,25,0.16);
+    --good-bg: rgba(12,163,12,0.18);
+    --neutral-bg: rgba(138,137,132,0.20);
+    --accent: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 28px 24px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+h1 { font-size: 22px; font-weight: 650; margin: 0 0 4px; letter-spacing: -0.01em; }
+.sub { color: var(--text-2); font-size: 13px; }
+.sub b { color: var(--text); font-weight: 600; }
+.banner {
+  display: none; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px;
+  border: 1px solid var(--critical); background: var(--critical-bg); color: var(--text); font-size: 13px;
+}
+.banner.show { display: block; }
+.banner.demo { border-color: var(--line-strong); background: var(--neutral-bg); }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  cursor: pointer; text-align: left; font: inherit; color: inherit;
+}
+.tile:hover { border-color: var(--line-strong); }
+.tile[aria-pressed="true"] { border-color: var(--text-2); box-shadow: inset 0 0 0 1px var(--text-2); }
+.tile .label { font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.tile .value { font-size: 28px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .note { font-size: 12px; color: var(--muted); }
+.tile.static { cursor: default; }
+.tile.static:hover { border-color: var(--line); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.controls input, .controls select {
+  font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 7px; padding: 7px 10px; min-height: 34px;
+}
+.controls input { min-width: 260px; }
+.controls .count { color: var(--muted); font-size: 13px; margin-left: auto; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px 12px; text-align: left; vertical-align: middle; }
+thead th {
+  font-size: 12px; font-weight: 600; color: var(--text-2); border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap; user-select: none;
+}
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { color: var(--text); }
+thead th .arrow { font-size: 10px; margin-left: 4px; opacity: 0.7; }
+tbody.site > tr.row { border-top: 1px solid var(--line); cursor: pointer; }
+tbody.site > tr.row:hover { background: var(--hover); }
+tbody.site:first-of-type > tr.row { border-top: none; }
+td.num { font-variant-numeric: tabular-nums; }
+.name { font-weight: 600; }
+.domain { color: var(--muted); font-size: 12px; }
+.env { font-size: 12px; color: var(--text-2); text-transform: capitalize; }
+.ver { font-family: var(--mono); font-size: 12.5px; }
+.ver .arrow { color: var(--muted); margin: 0 4px; }
+.zero { color: var(--muted); }
+.chev { color: var(--muted); transition: transform .15s; display: inline-block; }
+tr.row[aria-expanded="true"] .chev { transform: rotate(90deg); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--text);
+}
+.pill svg { flex: none; }
+.s-action { background: var(--critical-bg); }
+.s-review { background: var(--warning-bg); }
+.s-current { background: var(--good-bg); }
+.s-unreachable { background: var(--neutral-bg); }
+.tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-strong);
+  color: var(--text-2); white-space: nowrap;
+}
+.tag.out { border-color: var(--critical); color: var(--text); }
+.tag.unv { border-style: dashed; }
+
+tr.detail > td { padding: 0 12px 14px 44px; background: var(--hover); }
+.detail-meta { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--text-2); padding: 12px 0 8px; }
+.detail-meta b { color: var(--text); font-weight: 600; }
+.err { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--critical-bg); padding: 8px 10px; border-radius: 6px; margin-top: 10px; }
+table.plugins { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table.plugins th, table.plugins td { padding: 7px 10px; font-size: 13px; }
+table.plugins tbody tr { border-top: 1px solid var(--line); }
+table.plugins .slug { color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.inactive { color: var(--muted); }
+
+.legend { margin-top: 14px; font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 16px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.note-line { font-size: 12.5px; color: var(--text); display: flex; gap: 6px; align-items: center; margin: 2px 0 8px; }
+.empty { padding: 32px; text-align: center; color: var(--muted); }
+footer { margin-top: 18px; font-size: 12px; color: var(--muted); }
+@media (max-width: 760px) {
+  .hide-sm { display: none; }
+  .controls input { min-width: 0; flex: 1; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Plumb <span style="font-weight:400;color:var(--text-2)">· WordPress Version Monitor</span></h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="sub" id="core"></div>
+  </header>
+
+  <div class="banner" id="stale" role="alert"></div>
+  <div class="banner demo" id="demo">Demo data. This dashboard was generated with <code>--demo</code>; none of these sites are real.</div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search site, domain, client, plugin, or theme" aria-label="Search">
+    <select id="group" aria-label="Client or group"><option value="">All clients</option></select>
+    <select id="env" aria-label="Environment">
+      <option value="">All environments</option>
+      <option value="production">Production</option>
+      <option value="staging">Staging</option>
+      <option value="development">Development</option>
+    </select>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="card">
+    <table id="sites">
+      <thead>
+        <tr>
+          <th style="width:28px"></th>
+          <th class="sortable" data-sort="status">Status</th>
+          <th class="sortable" data-sort="name">Site</th>
+          <th class="sortable hide-sm" data-sort="group">Client</th>
+          <th class="sortable hide-sm" data-sort="environment">Env</th>
+          <th class="sortable" data-sort="core">WordPress core</th>
+          <th class="sortable" data-sort="outdated">Outdated plugins &amp; themes</th>
+          <th class="sortable hide-sm" data-sort="unverified">Unverified</th>
+          <th class="sortable hide-sm" data-sort="php">PHP</th>
+        </tr>
+      </thead>
+    </table>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const DATA = /*__PLUMB_DATA__*/null;
+
+const STATUS = {
+  action:      { label: "Action needed", color: "var(--critical)", cls: "s-action",
+                 icon: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--critical)"/><rect x="6.1" y="3" width="1.8" height="5" rx=".9" fill="#fff"/><circle cx="7" cy="10.3" r="1" fill="#fff"/></svg>' },
+  review:      { label: "Review", color: "var(--warning)", cls: "s-review",
+                 icon: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 .8 13.6 13H.4z" fill="var(--warning)"/><rect x="6.2" y="4.6" width="1.6" height="4.4" rx=".8" fill="#0b0b0b"/><circle cx="7" cy="10.9" r=".95" fill="#0b0b0b"/></svg>' },
+  current:     { label: "Current", color: "var(--good)", cls: "s-current",
+                 icon: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--good)"/><path d="M3.8 7.2 6 9.4l4.3-4.6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
+  unreachable: { label: "Unreachable", color: "var(--neutral)", cls: "s-unreachable",
+                 icon: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="var(--neutral)" stroke-width="2"/><path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke="var(--neutral)" stroke-width="1.8" stroke-linecap="round"/></svg>' },
+};
+const SEV = { action: 0, unreachable: 1, review: 2, current: 3 };
+const PSTATE = {
+  outdated:   '<span class="tag out">Outdated</span>',
+  unverified: '<span class="tag unv" title="No published version found on wordpress.org and no vendor update source reported. Check with the vendor.">Unverified</span>',
+  current:    '<span class="tag">Current</span>',
+};
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pill = st => `<span class="pill ${STATUS[st].cls}">${STATUS[st].icon}${STATUS[st].label}</span>`;
+const fmt = iso => {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+};
+const ago = ms => {
+  const h = ms / 36e5;
+  if (h < 1) return `${Math.max(1, Math.round(ms / 6e4))} min ago`;
+  if (h < 48) return `${Math.round(h)} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+};
+
+let filterStatus = "";
+let sortKey = "status", sortDir = 1;
+const open = new Set();
+
+function outdated(s) { return (s.counts.outdated_active || 0) + (s.counts.outdated_inactive || 0); }
+function unverified(s) { return (s.counts.unverified_active || 0) + (s.counts.unverified_inactive || 0); }
+
+function header() {
+  if (!DATA) {
+    document.getElementById("sub").textContent = "No data embedded. Run collector.py to generate this page.";
+    return false;
+  }
+  const gen = new Date(DATA.generated_at);
+  const next = new Date(gen.getTime() + DATA.interval_hours * 36e5);
+  document.getElementById("sub").innerHTML =
+    `Last updated <b>${esc(fmt(DATA.generated_at))}</b> (${ago(Date.now() - gen)}) · ` +
+    `next run around ${esc(fmt(next.toISOString()))} · every ${DATA.interval_hours} hours`;
+  document.getElementById("core").innerHTML =
+    `Latest WordPress on wordpress.org: <b class="ver">${esc(DATA.core_latest)}</b>`;
+
+  // If the collector stops running, say so. A stale "all green" is worse than no dashboard.
+  const lateMs = Date.now() - gen.getTime() - (DATA.interval_hours + 1) * 36e5;
+  if (lateMs > 0 && !DATA.demo) {
+    const b = document.getElementById("stale");
+    b.innerHTML = `<b>This data is stale.</b> The last successful run was ${ago(Date.now() - gen)}; ` +
+      `a new run was due ${ago(lateMs)}. Check the collector's scheduled job before trusting these results.`;
+    b.classList.add("show");
+  }
+  if (DATA.demo) document.getElementById("demo").classList.add("show");
+  return true;
+}
+
+function tiles() {
+  const s = DATA.summary;
+  const t = [
+    { key: "", label: "Sites", value: s.sites, note: "monitored sites" },
+    { key: "action", label: STATUS.action.icon + "Action needed", value: s.action, note: "core behind, or active plugin/theme outdated" },
+    { key: "review", label: STATUS.review.icon + "Review", value: s.review, note: DATA.unverified_is_review ? "inactive outdated, unverified, or old agent" : "inactive outdated or old agent" },
+    { key: "current", label: STATUS.current.icon + "Current", value: s.current, note: "everything verified current" },
+    { key: "unreachable", label: STATUS.unreachable.icon + "Unreachable", value: s.unreachable, note: "pull failed or refused" },
+  ];
+  const el = document.getElementById("tiles");
+  el.innerHTML = t.map(x =>
+    `<button class="tile" data-key="${x.key}" aria-pressed="${filterStatus === x.key}">
+       <div class="label">${x.label}</div><div class="value">${x.value}</div><div class="note">${x.note}</div>
+     </button>`).join("") +
+    `<div class="tile static"><div class="label">Outdated plugins &amp; themes</div><div class="value">${s.outdated}</div>
+       <div class="note">${s.unverified} unverified</div></div>`;
+  el.querySelectorAll("button.tile").forEach(b => b.onclick = () => {
+    filterStatus = b.dataset.key; tiles(); render();
+  });
+}
+
+function groups() {
+  const sel = document.getElementById("group");
+  [...new Set(DATA.sites.map(s => s.group || "Ungrouped"))].sort((a, b) => a.localeCompare(b))
+    .forEach(g => sel.insertAdjacentHTML("beforeend", `<option value="${esc(g)}">${esc(g)}</option>`));
+}
+
+function sortVal(s) {
+  switch (sortKey) {
+    case "status": return SEV[s.status] * 1000 - outdated(s);
+    case "name": return s.name || "";
+    case "group": return (s.group || "").toLowerCase();
+    case "environment": return s.environment || "";
+    case "core": return s.core_state === "behind" ? 0 : s.core_state === "unknown" ? 1 : 2;
+    case "outdated": return -outdated(s);
+    case "unverified": return -unverified(s);
+    case "php": return s.php_version || "";
+  }
+}
+
+function render() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const env = document.getElementById("env").value;
+  const grp = document.getElementById("group").value;
+  let rows = DATA.sites.filter(s =>
+    (!filterStatus || s.status === filterStatus) &&
+    (!env || s.environment === env) &&
+    (!grp || s.group === grp) &&
+    (!q || [s.name, s.primary_domain, s.group, ...(s.components || []).flatMap(p => [p.slug, p.title])]
+            .some(v => (v || "").toLowerCase().includes(q))));
+  rows.sort((a, b) => {
+    const va = sortVal(a), vb = sortVal(b);
+    return (va < vb ? -1 : va > vb ? 1 : (a.name < b.name ? -1 : 1)) * sortDir;
+  });
+
+  document.getElementById("count").textContent = `${rows.length} of ${DATA.sites.length} sites`;
+  document.querySelectorAll("thead th.sortable").forEach(th => {
+    th.innerHTML = th.textContent.replace(/[▲▼]/g, "").trim().replace(/&/g, "&amp;") +
+      (th.dataset.sort === sortKey ? `<span class="arrow">${sortDir > 0 ? "▲" : "▼"}</span>` : "");
+  });
+
+  const table = document.getElementById("sites");
+  table.querySelectorAll("tbody").forEach(tb => tb.remove());
+  if (!rows.length) {
+    table.insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="9" class="empty">No sites match these filters.</td></tr></tbody>`);
+    return;
+  }
+  table.insertAdjacentHTML("beforeend", rows.map(siteRows).join(""));
+  table.querySelectorAll("tr.row").forEach(tr => {
+    const toggle = () => {
+      const id = tr.dataset.id;
+      open.has(id) ? open.delete(id) : open.add(id);
+      render();
+    };
+    tr.onclick = toggle;
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+  });
+}
+
+function coreCell(s) {
+  if (!s.core_version) return `<span class="zero">unknown</span>`;
+  if (s.core_state === "behind")
+    return `<span class="ver">${esc(s.core_version)}<span class="arrow">→</span>${esc(s.core_latest)}</span> <span class="tag out">Behind</span>`;
+  return `<span class="ver">${esc(s.core_version)}</span>`;
+}
+
+function outdatedCell(s) {
+  if (s.status === "unreachable") return `<span class="zero">–</span>`;
+  const a = s.counts.outdated_active || 0, i = s.counts.outdated_inactive || 0;
+  if (!a && !i) return `<span class="zero">0</span>`;
+  const parts = [];
+  if (a) parts.push(`<b>${a}</b> active`);
+  if (i) parts.push(`${i} inactive`);
+  return parts.join(" · ");
+}
+
+function siteRows(s) {
+  const isOpen = open.has(s.id);
+  const unv = unverified(s);
+  let html = `<tbody class="site">
+    <tr class="row" data-id="${esc(s.id)}" tabindex="0" aria-expanded="${isOpen}">
+      <td><span class="chev">›</span></td>
+      <td>${pill(s.status)}</td>
+      <td><div class="name">${esc(s.name)}</div><div class="domain">${esc(s.primary_domain || "")}</div></td>
+      <td class="hide-sm">${esc(s.group || "")}</td>
+      <td class="hide-sm env">${esc(s.environment || "")}</td>
+      <td>${coreCell(s)}</td>
+      <td class="num">${outdatedCell(s)}</td>
+      <td class="num hide-sm">${s.status === "unreachable" ? '<span class="zero">–</span>' : unv ? unv : '<span class="zero">0</span>'}</td>
+      <td class="hide-sm ver">${esc(s.php_version || "")}</td>
+    </tr>`;
+  if (isOpen) html += `<tr class="detail"><td colspan="9">${detail(s)}</td></tr>`;
+  return html + `</tbody>`;
+}
+
+function detail(s) {
+  const f = s.flags || {};
+  let html = `<div class="detail-meta">${[
+    `<span>URL <b>${esc(s.url)}</b></span>`,
+    s.status !== "unreachable" ? `<span>Plugins <b>${s.counts.plugins ?? 0}</b> · Themes <b>${s.counts.themes ?? 0}</b> (${s.counts.inactive ?? 0} inactive)</span>` : "",
+    s.agent_version ? `<span>Agent <b>${esc(s.agent_version)}</b>${s.agent_version !== DATA.agent_latest ? ` (latest ${esc(DATA.agent_latest)})` : ""}</span>` : "",
+    s.db_server ? `<span>DB <b>${esc(s.db_server)}</b></span>` : "",
+    s.is_multisite ? `<span><b>Multisite</b> (${esc(s.site_count)} sites)</span>` : "",
+    `<span>Pulled in ${esc(s.collect_seconds)}s</span>`,
+  ].filter(Boolean).join("")}</div>`;
+  if (s.error) return html + `<div class="err">${esc(s.error)}</div>`;
+
+  const flagTags = [
+    f.file_editing_disabled === false ? `<span class="tag out" title="DISALLOW_FILE_EDIT is not set; an admin account can edit PHP from wp-admin">File editor enabled</span>` : "",
+    f.wp_debug ? `<span class="tag out" title="WP_DEBUG is on in this environment">WP_DEBUG on</span>` : "",
+    f.wp_debug_display ? `<span class="tag out" title="Errors may be shown to visitors">Debug output displayed</span>` : "",
+  ].filter(Boolean);
+  if (flagTags.length) html += `<div class="detail-meta"><span>Configuration</span>${flagTags.join(" ")}</div>`;
+  (s.notes || []).forEach(n => html += `<div class="note-line">${STATUS.review.icon} ${esc(n)}</div>`);
+
+  const comps = s.components || [];
+  if (!comps.length) return html + `<div class="detail-meta">No plugins or themes reported.</div>`;
+  html += `<table class="plugins"><thead><tr>
+      <th>Name</th><th>Type</th><th>State</th><th>Status</th><th>Installed</th><th>Published</th><th class="hide-sm">Source</th>
+    </tr></thead><tbody>`;
+  html += comps.map(p => `<tr class="${p.active ? "" : "inactive"}">
+      <td>${esc(p.title)}<div class="slug">${esc(p.slug)}</div></td>
+      <td style="text-transform:capitalize">${esc(p.kind)}</td>
+      <td>${PSTATE[p.state]}</td>
+      <td style="text-transform:capitalize">${esc((p.status || "").replace("-", " "))}</td>
+      <td class="ver">${esc(p.installed)}</td>
+      <td class="ver">${p.latest ? esc(p.latest) : '<span class="zero">–</span>'}</td>
+      <td class="hide-sm">${esc(p.source || "none found")}</td>
+    </tr>`).join("");
+  return html + `</tbody></table>`;
+}
+
+function legend() {
+  document.getElementById("legend").innerHTML =
+    `<span>${STATUS.action.icon} Action needed: core is behind the latest release, or an active plugin or theme is behind its published version</span>
+     <span>${STATUS.review.icon} Review: only inactive components are behind${DATA.unverified_is_review ? ", an active one couldn't be verified" : ""}, or the agent is out of date. Inactive plugins can still be exploited; remove what isn't used.</span>
+     <span>${STATUS.unreachable.icon} Unreachable: the pull failed or the agent refused it</span>`;
+  document.getElementById("footer").innerHTML =
+    `Run took ${DATA.duration_seconds}s. Every report was signed by the site's Plumb Agent and verified before use. ` +
+    `Published versions come from wordpress.org, or from the vendor's own updater for premium components. ` +
+    `"Unverified" means neither source reported a version; it is not treated as current. Must-use plugins and drop-ins are not version-checked.`;
+}
+
+if (header()) {
+  tiles(); groups(); legend();
+  document.getElementById("q").oninput = render;
+  document.getElementById("env").onchange = render;
+  document.getElementById("group").onchange = render;
+  document.querySelectorAll("thead th.sortable").forEach(th => th.onclick = () => {
+    if (sortKey === th.dataset.sort) sortDir = -sortDir; else { sortKey = th.dataset.sort; sortDir = 1; }
+    render();
+  });
+  render();
+}
+</script>
+</body>
+</html>
