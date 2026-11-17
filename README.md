@@ -2,6 +2,8 @@
 
 *WordPress version monitor.* A plumb line shows whether something is actually true, not just whether it looks true from where you stand.
 
+> **Not technical?** Start with the [Plumb User Guide](docs/USER_GUIDE.md). It covers reading the dashboard and checking the Plumb Agent on a WordPress site, in plain language. This README is for whoever sets Plumb up.
+
 Every 12 hours Plumb pulls a signed report from each WordPress site you list, checks core, plugin and theme versions against what's currently published, and shows a status for each site on a single dashboard page. It works on any host: WP Engine, shared hosting, a VPS, anything that serves WordPress.
 
 ## How it works
