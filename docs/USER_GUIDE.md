@@ -14,13 +14,36 @@ A WordPress website is built from three kinds of parts, and each one gets update
 
 When a company fixes a security hole in one of these parts, it releases a new version. Plumb compares the version each of your sites is running with the newest version available, and puts every site into one of four plain statuses on a single page.
 
-**Who this guide is for.** Anyone who reads the Plumb dashboard, and anyone who manages a WordPress site that Plumb watches. You don't need a technical background. Setting up the Plumb server itself is covered in a separate technical guide for your Plumb administrator.
+**Who this guide is for.** Anyone who reads the Plumb dashboard, and anyone who manages a WordPress site that Plumb watches. You don't need a technical background. Setting up Plumb itself is covered in a separate technical guide (the README) for your Plumb administrator.
 
 **What Plumb does not do.** It doesn't update anything, change anything, or fix anything on your sites; it only looks. It also can't tell whether a site has already been broken into. It tells you where the doors are unlocked, not whether someone already walked through one.
 
-## Reading the dashboard
+## Opening the dashboard
 
-The dashboard is one web page. Your Plumb administrator will give you its address. Open it in any web browser; there's nothing to install and nothing to log in to inside the page itself.
+The dashboard is a web page. You need three things from your Plumb administrator:
+
+- **The address.** It looks like `https://plumb.example.org:6443/`. The `:6443` at the end is part of the address; leave it in.
+- **A username.** Usually `plumb`.
+- **A password.**
+
+**To open it:**
+
+1. Type the address into any web browser. If you type `http://` instead of `https://` by mistake, Plumb sends you to the right address on its own.
+2. Your browser shows a small sign-in box. Enter the username and password, and confirm.
+3. The dashboard appears.
+
+**If your browser warns that the connection isn't private.** Plumb can use a certificate that it creates itself, and browsers warn about those. Your Plumb administrator will tell you whether to expect this warning.
+
+- **If they told you to expect it:** use your browser's option to continue. In Chrome and Edge, that's **Advanced**, then **Proceed**; in Safari, **Show Details**, then **visit this website**; in Firefox, **Advanced**, then **Accept the Risk and Continue**. Most browsers remember the choice.
+- **If they didn't, or the warning appears for the first time on a computer you've used before:** stop and contact them before going further.
+
+**If you see "Too many failed sign-in attempts."** Ten wrong passwords in a row lock the dashboard for 15 minutes. Wait, then try again with the correct password. On some setups, one person's mistakes can lock out everyone for those 15 minutes, so tell your Plumb administrator if it keeps happening.
+
+**If you see "The first check of your sites is running."** Plumb has just been started and hasn't finished its first check. The page refreshes on its own every 30 seconds; the first check usually takes a minute or two.
+
+**Keep the password to yourself.** Don't write it in emails or chat messages, and don't save it on a shared computer.
+
+## Reading the dashboard
 
 The page has four parts, top to bottom.
 
@@ -28,7 +51,10 @@ The page has four parts, top to bottom.
 
 *The dashboard with sample data. The top site is opened to show its plugins and themes.*
 
-**1. The header.** Shows when the information was last updated and when the next update is due. Plumb updates on its own every 12 hours. If you see a red box that says **"This data is stale,"** Plumb has stopped updating. Don't rely on the page until your Plumb administrator fixes it; a page that looks fine but is three days old is worse than no page.
+**1. The header.** Shows when the information was last updated and when the next update is due. Plumb updates on its own every 12 hours, and right away when your administrator adds a site. A colored box may appear under the header:
+
+- **"This data is stale"** (red): Plumb has stopped updating. Don't rely on the page until your Plumb administrator fixes it; a page that looks fine but is three days old is worse than no page.
+- **"Demo data: none of these sites are real"** (gray): the page is showing sample sites while Plumb is being set up. Your real sites appear once your administrator switches it over.
 
 **2. The summary boxes.** A row of boxes counts your sites by status: how many need action, how many need review, how many are current, and how many Plumb couldn't reach. Click any box to show only those sites. Click **Sites** to show everything again.
 
@@ -106,7 +132,7 @@ Your Plumb administrator usually installs the Agent for you, because it goes int
 
 **What you'll need from your Plumb administrator:**
 
-- The Plumb server's **IP address**: a number like `203.0.113.10` that identifies the computer Plumb runs on.
+- The Plumb computer's **IP address**: a number like `203.0.113.10` that identifies the computer Plumb runs on.
 - Confirmation that the **secret code** is set up. They normally handle this themselves.
 
 **Checking the settings, step by step:**
@@ -115,7 +141,8 @@ Your Plumb administrator usually installs the Agent for you, because it goes int
 2. In the left-hand menu, go to **Settings**, then **Plumb Agent**. On a network of sites, it's under **Network Admin**, then **Settings**.
 3. Look at the **Status** box at the top:
     - **Shared secret** should say "Set in wp-config.php." If it says **Not set**, Plumb can't read the site; tell your Plumb administrator.
-    - **Puller allowlist** should list the Plumb server's IP address. If it says **Empty**, continue to step 4.
+    - **Puller allowlist** should list the Plumb computer's IP address. If it says **Empty**, continue to step 4.
+    - **This page loaded over HTTPS** should say **Yes**. If it says **No** and your site's address starts with `https://`, tell your Plumb administrator.
 4. Under **Allowed puller IP addresses**, type the IP address your administrator gave you, one per line.
 5. Leave **Read the client IP from** on its first option unless your administrator tells you otherwise.
 6. Leave **Require HTTPS** ticked.
@@ -123,11 +150,15 @@ Your Plumb administrator usually installs the Agent for you, because it goes int
 
 ![The Plumb Agent settings page in WordPress, showing the Status box, the allowed IP addresses, and Recent activity.](images/agent-settings.png)
 
-*The Plumb Agent settings page on a test site. Your addresses will differ.*
+*The Plumb Agent settings page on a correctly set-up site. Your addresses will differ.*
 
-**If your administrator asks you to generate the secret code:** click **Generate secret** under **Shared secret**. The code appears once and is never shown again. Send it to your administrator by phone or through a password manager, not by ordinary email or chat. Don't share it with anyone else.
+**If your administrator asks you to generate the secret code:** click **Generate secret** under **Shared secret**. That section only appears when the code hasn't already been set up another way. The code appears once and is never shown again. Send it to your administrator by phone or through a password manager, not by ordinary email or chat. Don't share it with anyone else.
 
-**The Recent activity box** at the bottom shows when Plumb last checked in, and lists any requests the Agent turned away, with the reason. Turned-away requests from unfamiliar addresses are normal: automated scanners probe every website on the internet. The Agent tells them nothing. If Plumb's own address appears there, send the reason shown to your Plumb administrator.
+**The Recent activity box** at the bottom shows when Plumb last checked in, and lists any requests the Agent turned away, with the reason.
+
+- **Turned-away requests from unfamiliar addresses are normal.** Automated scanners probe every website on the internet, and the Agent tells them nothing.
+- **"Address now ignored for 15 minutes"** means a scanner kept trying, and the Agent stopped listening to it for a while.
+- **If Plumb's own address appears there,** send the reason shown to your Plumb administrator.
 
 **Please don't** delete the Agent, change the secret code, or edit the address list without talking to your Plumb administrator first. Any of these will stop Plumb from seeing your site, and the site will show as Unreachable.
 
@@ -149,22 +180,26 @@ No, and that's on purpose. Plumb only reads version numbers. Updates sometimes b
 No. The Agent only gives out version numbers, and only to a caller that proves it's Plumb with your site's secret code, from an approved address. To everyone else, it behaves as if it doesn't exist.
 
 **Who should see the dashboard?**
-Only the people responsible for the sites. The page is effectively a list of which websites have unlocked doors, so don't forward it, post it, or attach it to a public ticket.
+Only the people responsible for the sites. The page is effectively a list of which websites have unlocked doors. Don't forward it, post it, take screenshots of it for public tickets, or share the password.
 
 **When should I contact my Plumb administrator?**
 
 - The red "This data is stale" box appears at the top of the page.
+- Your browser warns about the connection and you weren't told to expect it.
 - A site stays **Unreachable** for more than one update (12 hours).
 - A site is missing from the list, or a site you no longer manage still appears.
 - A live site has shown **Action needed** for more than a week.
+- You're locked out by "Too many failed sign-in attempts" more than once.
 
 ## Glossary
 
 | Term | Plain meaning |
 | --- | --- |
 | Active / inactive | Whether a plugin or theme is switched on. Inactive parts are still installed and can still be a risk |
+| Certificate | What lets your browser confirm it's talking to the real Plumb, and keeps the connection private. A certificate Plumb made itself works, but browsers warn about it |
 | Core | WordPress itself, the engine every WordPress site runs on |
 | Dashboard | The Plumb web page that shows all your sites and their statuses |
+| Demo data | Sample sites Plumb shows while it's being set up. None of them are real |
 | Development / staging | Private test copies of a site, used to try changes before they go live |
 | Environment | Which copy of a site a row describes: production, staging, or development |
 | HTTPS | The secure, encrypted way web pages travel. The padlock in your browser's address bar |
@@ -174,6 +209,7 @@ Only the people responsible for the sites. The page is effectively a list of whi
 | Plumb Agent | The small plugin on each site that reports its version numbers to Plumb |
 | Production | The live site the public sees |
 | Secret code (shared secret) | A long random code known only to your site and to Plumb. It proves that a request really comes from Plumb |
+| Sign-in | The username and password your browser asks for before showing the dashboard |
 | Stale | Out of date. A stale dashboard hasn't been refreshed on schedule |
 | Theme | Controls how a WordPress site looks |
 | Unverified | Plumb couldn't find the newest version of a part to compare against, so it won't call it up to date |
