@@ -68,7 +68,9 @@ If the Plumb container is compromised, the attacker gets the version inventory o
 |---|---|
 | **macOS** (Intel or Apple Silicon) | [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/) |
 | **Windows 10/11** | [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/), using the WSL 2 backend it recommends |
-| **Linux** | [Docker Engine](https://docs.docker.com/engine/install/) and the Compose plugin (`docker compose version` should work) |
+| **Linux** | [Docker Engine](https://docs.docker.com/engine/install/) and the Compose plugin |
+
+On any of them, `docker compose version` must report **2.24 or newer**; `compose.yaml` uses a form of `env_file` that older versions reject.
 
 **Licensing:**
 
@@ -119,7 +121,7 @@ Your browser will warn that the certificate isn't trusted. That's expected for a
 docker compose logs plumb | grep fingerprint
 ```
 
-When you're done looking, set `PLUMB_DEMO=0`.
+When you're done looking, set `PLUMB_DEMO=0` and run `docker compose up -d`. Plumb notices the switch and replaces the demo data with a real check right away.
 
 ### 4. Find the address your sites will see
 
@@ -167,12 +169,12 @@ docker compose exec plumb python /app/plumb_server.py check acmecorp
 
 `check` pulls one site and prints the result without changing the dashboard. If it fails with a 404, open the agent's **Recent activity** section, which records the real reason.
 
-- **Changes to `sites.json`** are picked up at the next run on their own.
+- **Changes to `sites.json`** are noticed within a minute, and Plumb runs a fresh check on its own.
 - **Changes to `plumb.env`** need `docker compose up -d`. Docker only reads that file when it creates the container, and it recreates the container automatically when the file changes.
 
 ### 6. Let it run
 
-The container starts with the computer (via `restart: unless-stopped`) and checks every site every 12 hours. If a run fails outright, it retries after 30 minutes. A restart doesn't trigger an extra run; Plumb picks up the schedule where it left off.
+The container starts with the computer (via `restart: unless-stopped`) and checks every site every 12 hours. If a run fails outright, it retries after 30 minutes. A restart doesn't trigger an extra run; Plumb picks up the schedule where it left off. It does run right away when there's no dashboard yet, when you switch between demo and live data, or when `sites.json` changes.
 
 **Opening port 6443 to other computers:**
 
@@ -213,12 +215,7 @@ To start completely fresh, run `docker compose down -v`. This deletes the `plumb
 - **One person:** accept the warning once, after checking the fingerprint against the logs.
 - **A team:** the warning trains people to click through warnings. Use your own certificate instead.
 
-If you change `PLUMB_HOSTNAMES` later, delete the old certificate so a new one is made:
-
-```bash
-docker compose exec plumb sh -c 'rm /data/tls/selfsigned-*'
-docker compose restart
-```
+If you change `PLUMB_HOSTNAMES` later, run `docker compose up -d`. Plumb notices the names changed and makes a new certificate, so the fingerprint changes too. It also renews the certificate on its own 30 days before it expires.
 
 **Your own certificate.** This can come from your internal certificate authority, or from a public one if Plumb has a real DNS name.
 
@@ -253,8 +250,8 @@ Plumb uses your certificate whenever both files exist, and then also sends HSTS.
 | Container exits right away | Read `docker compose logs plumb`. Usually the dashboard password is missing or shorter than 12 characters, or `config/sites.json` doesn't exist (set `PLUMB_DEMO=1` to preview without it) |
 | `env file ... not found` | `config/plumb.env` hasn't been created yet; copy it from `plumb.env.example` |
 | Browser says the connection isn't secure | Expected with the self-signed certificate. Check the fingerprint, or install your own certificate (see [Certificates](#certificates)) |
-| Browser can't connect at all | Use `https://`, not `http://`, and include `:6443`. From another computer, check the host firewall |
-| "Too many failed sign-in attempts" | That address had 10 failed sign-ins. Wait 15 minutes, or run `docker compose restart` to clear the lockout |
+| Browser can't connect at all | Include `:6443` in the address. (If you type `http://`, Plumb redirects you to `https://`.) From another computer, check the host firewall. On a Mac with Docker Desktop's Kubernetes turned on, Kubernetes already uses port 6443; turn it off, or change the port line in `compose.yaml` to `"6444:6443"` |
+| "Too many failed sign-in attempts" | That address had 10 failed sign-ins. Wait 15 minutes, or run `docker compose restart` to clear the lockout. On macOS and Windows, Docker Desktop can make every visitor appear to come from the same address, so one person's mistyped password can lock out everyone for 15 minutes |
 | `404: agent not installed, or it refused the request` | Check the agent's **Recent activity**. "IP not on allowlist": the site sees a different IP (see "Read the client IP from" and step 4). "timestamp outside 5-minute window": see the next row. "bad signature": the secrets don't match. "not HTTPS": the host isn't telling WordPress the request was HTTPS |
 | "timestamp outside 5-minute window" | The clock on the Plumb computer is off. Docker uses the host's clock, so fix the host's time sync. On a Mac or Windows laptop, Docker Desktop's clock can drift after sleep; restarting Docker Desktop fixes it |
 | `HTTP 403` / `401` from a site | A WAF or security plugin (Cloudflare, Wordfence, Sucuri) blocked the request before WordPress saw it. Allowlist the Plumb IP there too |
@@ -278,16 +275,17 @@ The site is unreachable for any pull that happens between steps 2 and 3. To rota
 
 Until a site is updated, the dashboard flags it as running an old agent.
 
-## Running without Docker
+## Running without Docker (development)
 
-Plumb also runs directly with Python 3.10 or newer. The files in `deploy/` are a systemd timer for Linux.
+For working on Plumb itself, it runs directly with Python 3.10 or newer:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python collector.py --env-file config/plumb.env     # writes output/index.html
+.venv/bin/python collector.py --demo                            # writes output/index.html with fake data
+.venv/bin/python collector.py --env-file config/plumb.env       # a real run
 ```
 
-That only produces the dashboard file. Serving it securely is then up to you: put an authenticating web server in front of it, or run `plumb_server.py serve` the same way the container does.
+For anything people rely on, use the container: it adds the schedule, HTTPS, sign-in and the hardening described above.
 
 ## Known gaps
 

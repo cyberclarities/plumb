@@ -15,13 +15,16 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
 import hmac
 import http.server
 import json
 import logging
 import os
 import pathlib
+import re
 import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -67,33 +70,52 @@ class Settings:
 
 
 # --------------------------------------------------------------------------- TLS
+def _wanted_names(s: Settings) -> list[str]:
+    return list(dict.fromkeys(["localhost", *s.hostnames, "127.0.0.1"]))
+
+
+def _selfsigned_is_current(cert_path: pathlib.Path, wanted: list[str]) -> bool:
+    """True if the existing self-signed certificate covers exactly these names and isn't near expiry."""
+    from cryptography import x509
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        have = {str(v) for v in san.get_values_for_type(x509.DNSName)} | \
+               {str(v) for v in san.get_values_for_type(x509.IPAddress)}
+        expires = cert.not_valid_after_utc
+    except Exception:
+        return False
+    return have == set(wanted) and expires - dt.datetime.now(dt.timezone.utc) > dt.timedelta(days=30)
+
+
 def ensure_certificate(s: Settings) -> tuple[pathlib.Path, pathlib.Path, bool]:
-    """Use the operator's certificate if present; otherwise create a self-signed one once."""
+    """Use the operator's certificate if present; otherwise keep a self-signed one that matches PLUMB_HOSTNAMES."""
     user_cert, user_key = s.config_dir / "tls" / "cert.pem", s.config_dir / "tls" / "key.pem"
     if user_cert.exists() and user_key.exists():
         return user_cert, user_key, True
     tls_dir = s.data_dir / "tls"
     cert, key = tls_dir / "selfsigned-cert.pem", tls_dir / "selfsigned-key.pem"
+    wanted = _wanted_names(s)
     if cert.exists() and key.exists():
-        return cert, key, False
+        if _selfsigned_is_current(cert, wanted):
+            return cert, key, False
+        log.info("PLUMB_HOSTNAMES changed or the certificate is near expiry; making a new self-signed certificate")
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
     import ipaddress
 
     tls_dir.mkdir(parents=True, exist_ok=True)
     pkey = ec.generate_private_key(ec.SECP256R1())
-    names = ["localhost", *s.hostnames]
     sans: list[x509.GeneralName] = []
-    for n in dict.fromkeys(names):
+    for n in wanted:
         try:
             sans.append(x509.IPAddress(ipaddress.ip_address(n)))
         except ValueError:
             sans.append(x509.DNSName(n))
-    sans.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[-1] if s.hostnames else "plumb")])
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, s.hostnames[0] if s.hostnames else "plumb")])
     now = dt.datetime.now(dt.timezone.utc)
     certificate = (
         x509.CertificateBuilder()
@@ -104,44 +126,78 @@ def ensure_certificate(s: Settings) -> tuple[pathlib.Path, pathlib.Path, bool]:
         .not_valid_after(now + dt.timedelta(days=825))
         .add_extension(x509.SubjectAlternativeName(sans), critical=False)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(pkey, hashes.SHA256())
     )
     key.write_bytes(pkey.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                        serialization.NoEncryption()))
     os.chmod(key, 0o600)
     cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    log.info("created a self-signed certificate for: %s", ", ".join(dict.fromkeys(names + ["127.0.0.1"])))
+    log.info("created a self-signed certificate for: %s", ", ".join(wanted))
     return cert, key, False
 
 
 def fingerprint(cert_path: pathlib.Path) -> str:
     der = ssl.PEM_cert_to_DER_cert(cert_path.read_text())
-    import hashlib
     h = hashlib.sha256(der).hexdigest().upper()
     return ":".join(h[i:i + 2] for i in range(0, len(h), 2))
 
 
 # --------------------------------------------------------------------------- scheduler
 class Scheduler(threading.Thread):
+    """Runs the collector on schedule, and right away when the dashboard is missing,
+    shows the wrong mode (demo vs. live), or sites.json has changed since the last run."""
+
     def __init__(self, s: Settings):
         super().__init__(daemon=True, name="scheduler")
         self.s = s
         self.stop = threading.Event()
         self.state = {"last_attempt": None, "last_ok": None, "last_error": None, "running": False}
+        self._snap: tuple[float, tuple[float | None, bool | None]] | None = None
 
-    def last_generated(self) -> float | None:
+    def snapshot(self) -> tuple[float | None, bool | None]:
+        """(generated_at, demo) of the current dashboard data; re-read only when the file changes."""
         p = self.s.output_dir / "data" / "latest.json"
         try:
-            ts = json.loads(p.read_text())["generated_at"]
-            return dt.datetime.fromisoformat(ts).timestamp()
+            mtime = p.stat().st_mtime
+        except OSError:
+            return None, None
+        if self._snap and self._snap[0] == mtime:
+            return self._snap[1]
+        try:
+            d = json.loads(p.read_text())
+            val = (dt.datetime.fromisoformat(d["generated_at"]).timestamp(), bool(d.get("demo")))
         except Exception:
+            val = (None, None)
+        self._snap = (mtime, val)
+        return val
+
+    def last_generated(self) -> float | None:
+        return self.snapshot()[0]
+
+    @staticmethod
+    def sites_mtime() -> float | None:
+        try:
+            return pathlib.Path(os.environ["SITES_FILE"]).stat().st_mtime
+        except OSError:
             return None
 
-    def run_collector(self) -> bool:
+    def reason_to_run(self, now: float) -> str | None:
+        last, was_demo = self.snapshot()
+        if last is None:
+            return "no dashboard yet"
+        if was_demo != self.s.demo:
+            return "switching to demo data" if self.s.demo else "switching from demo to live data"
+        if not self.s.demo and (self.sites_mtime() or 0) > last:
+            return "sites.json changed"
+        if now >= last + self.s.interval_h * 3600:
+            return "scheduled"
+        return None
+
+    def run_collector(self, reason: str) -> bool:
         cmd = [sys.executable, str(COLLECTOR)] + (["--demo"] if self.s.demo else [])
         self.state.update(running=True, last_attempt=time.time())
-        log.info("collector run starting%s", " (demo data)" if self.s.demo else "")
+        log.info("collector run starting (%s)%s", reason, ", demo data" if self.s.demo else "")
         try:
             proc = subprocess.run(cmd, timeout=self.s.run_timeout, capture_output=True, text=True)
             for line in (proc.stdout + proc.stderr).splitlines():
@@ -159,19 +215,30 @@ class Scheduler(threading.Thread):
         return ok
 
     def run(self) -> None:
-        interval = self.s.interval_h * 3600
+        retry_at = 0.0       # after a failed run, don't try again before this
+        announced = None     # last "next run" time logged, so the log isn't repeated every minute
         while not self.stop.is_set():
-            last = self.last_generated()
             now = time.time()
-            due = (last + interval) if last else now
-            if now >= due:
-                ok = self.run_collector()
-                wait = interval if ok else self.s.retry_min * 60
-            else:
-                wait = due - now
-                log.info("next collector run at %s", dt.datetime.fromtimestamp(due, dt.timezone.utc).isoformat(timespec="minutes"))
-            # wake at least every 10 minutes so a changed latest.json (e.g. a manual run-once) is picked up
-            self.stop.wait(min(wait, 600))
+            # A fixed sites.json shouldn't wait out the retry delay.
+            if retry_at and (self.sites_mtime() or 0) > (self.state["last_attempt"] or 0):
+                retry_at = 0.0
+            reason = self.reason_to_run(now)
+            if reason and now >= retry_at:
+                ok = self.run_collector(reason)
+                if ok and self.reason_to_run(time.time()):
+                    # Reported success but the dashboard didn't change; don't spin re-running it.
+                    log.warning("collector finished but the dashboard wasn't updated; check OUTPUT_DIR")
+                    ok = False
+                retry_at = 0.0 if ok else time.time() + self.s.retry_min * 60
+                continue
+            last = self.last_generated()
+            due = retry_at if retry_at else (last + self.s.interval_h * 3600 if last else now)
+            if due != announced:
+                log.info("next collector run %s at %s", "retry" if retry_at else "scheduled",
+                         dt.datetime.fromtimestamp(due, dt.timezone.utc).isoformat(timespec="minutes"))
+                announced = due
+            # Wake every minute so an edited sites.json or a manual run-once is noticed promptly.
+            self.stop.wait(max(1.0, min(due - time.time(), 60)))
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -233,8 +300,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return len(recent) >= FAIL_LIMIT
 
     def _record_failure(self, ip: str) -> None:
+        now = time.time()
         with self.lock:
-            self.failures.setdefault(ip, []).append(time.time())
+            self.failures.setdefault(ip, []).append(now)
+            if len(self.failures) > 1000:  # forget addresses with no recent failures
+                for k in [k for k, v in self.failures.items() if not v or now - v[-1] > FAIL_WINDOW]:
+                    del self.failures[k]
 
     def _authorized(self) -> bool:
         s = self.settings
@@ -300,12 +371,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._send(code, json.dumps(body).encode(), "application/json")
 
 
+HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$")
+
+
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    ssl_ctx: ssl.SSLContext = None  # type: ignore
+
+    def finish_request(self, request, client_address):
+        """Runs in the request's own thread: a slow or silent client can't hold up anyone else."""
+        request.settimeout(15)
+        first = request.recv(1, socket.MSG_PEEK)
+        if not first:
+            return
+        if first != b"\x16":  # not a TLS handshake: someone typed http:// instead of https://
+            return self._redirect_to_https(request, client_address)
+        tls = self.ssl_ctx.wrap_socket(request, server_side=True)
+        try:
+            self.RequestHandlerClass(tls, client_address, self)
+        finally:
+            tls.close()
+
+    def _redirect_to_https(self, sock, client_address):
+        data = b""
+        while b"\r\n\r\n" not in data and len(data) < 8192:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+            data += chunk
+        lines = data.decode("latin-1").split("\r\n")
+        parts = lines[0].split(" ")
+        path = parts[1] if len(parts) >= 2 and parts[1].startswith("/") else "/"
+        host = next((l.split(":", 1)[1].strip() for l in lines[1:] if l.lower().startswith("host:")), "")
+        if not HOST_RE.match(host):
+            host = f"localhost:{self.server_address[1]}"
+        location = f"https://{host}{path}"
+        body = (f"Plumb only answers over HTTPS. Go to {location}\n").encode()
+        sock.sendall(b"HTTP/1.1 301 Moved Permanently\r\nLocation: " + location.encode("latin-1", "replace") +
+                     b"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + str(len(body)).encode() +
+                     b"\r\nConnection: close\r\n\r\n" + body)
+        log.info("%s plain HTTP request; redirected to HTTPS", client_address[0])
 
     def handle_error(self, request, client_address):
-        # Port scanners, plain-HTTP requests and dropped connections end up here. One line, no traceback.
+        # Port scanners, failed handshakes and dropped connections end up here. One line, no traceback.
         exc = sys.exc_info()[1]
         log.info("%s connection closed: %s", client_address[0], exc.__class__.__name__ if exc else "error")
 
@@ -325,9 +434,8 @@ def serve(demo: bool = False) -> int:
 
     sched = Scheduler(s)
     Handler.settings, Handler.scheduler, Handler.hsts = s, sched, user_supplied
+    Server.ssl_ctx = ctx
     httpd = Server((s.bind, s.port), Handler)
-    # Handshake happens in the request thread, so a slow client can't block the listener.
-    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True, do_handshake_on_connect=False)
 
     def shutdown(signum, _frame):
         log.info("received signal %s, shutting down", signum)

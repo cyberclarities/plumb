@@ -60,7 +60,7 @@ def load_env_file(path: str | None) -> None:
     p = pathlib.Path(path)
     if not p.exists():
         sys.exit(f"env file not found: {path}")
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -79,7 +79,7 @@ class Config:
         self.output_dir = pathlib.Path(os.path.expanduser(os.environ.get("OUTPUT_DIR", str(HERE / "output"))))
         self.workers = int(os.environ.get("WORKERS", "8"))
         self.timeout = int(os.environ.get("REQUEST_TIMEOUT", "30"))
-        self.interval_hours = int(os.environ.get("INTERVAL_HOURS", "12"))
+        self.interval_hours = float(os.environ.get("INTERVAL_HOURS", "12"))
         self.history_keep = int(os.environ.get("HISTORY_KEEP", "60"))  # 60 x 12h = 30 days
         self.unverified_is_review = env_bool("UNVERIFIED_IS_REVIEW", True)
         self.stale_update_check_days = int(os.environ.get("STALE_UPDATE_CHECK_DAYS", "3"))
@@ -88,9 +88,17 @@ class Config:
 def load_sites(cfg: Config) -> list[dict]:
     if not cfg.sites_file.exists():
         sys.exit(f"sites file not found: {cfg.sites_file} (copy config/sites.example.json to config/sites.json)")
-    raw = json.loads(cfg.sites_file.read_text(encoding="utf-8-sig"))  # utf-8-sig: Windows editors may add a BOM
+    try:
+        raw = json.loads(cfg.sites_file.read_text(encoding="utf-8-sig"))  # utf-8-sig: Windows editors may add a BOM
+    except json.JSONDecodeError as e:
+        sys.exit(f"{cfg.sites_file} isn't valid JSON: {e.msg} at line {e.lineno}, column {e.colno}. "
+                 "Common causes: a missing comma between sites, or a comma after the last one.")
+    if not isinstance(raw, dict) or not isinstance(raw.get("sites"), list):
+        sys.exit(f'{cfg.sites_file} must look like {{"sites": [ ... ]}} (see config/sites.example.json)')
     sites, seen = [], set()
-    for i, s in enumerate(raw.get("sites", [])):
+    for i, s in enumerate(raw["sites"]):
+        if not isinstance(s, dict):
+            sys.exit(f"sites[{i}] in {cfg.sites_file} must be an object with a name and url")
         name = s.get("name", "")
         if not SITE_NAME_RE.match(name):
             sys.exit(f"sites[{i}]: invalid or missing name {name!r}")
@@ -104,7 +112,7 @@ def load_sites(cfg: Config) -> list[dict]:
         if parts.scheme == "http" and not s.get("allow_insecure"):
             sys.exit(f"site {name}: url is http://. Use https://, or set \"allow_insecure\": true for a lab site.")
         if s.get("secret"):
-            sys.exit(f"site {name}: put the secret in .env and reference it with secret_env, not in sites.json")
+            sys.exit(f"site {name}: put the secret in config/plumb.env and reference it with secret_env, not in sites.json")
         sites.append({
             "name": name,
             "url": url,
@@ -217,6 +225,13 @@ def pull_site(session, site: dict, secret: str, timeout: int) -> dict:
         if r.status_code == 404:
             last_err = ("404: agent not installed, or it refused the request. The agent answers 404 on purpose; "
                         "check its Recent activity in wp-admin > Settings > Plumb Agent for the real reason.")
+            # WordPress's own "no route" answer means its REST API was reached, so the agent is missing or said
+            # no. Trying ?rest_route= then would only add a second refusal to the agent's log.
+            try:
+                if r.json().get("code") == "rest_no_route":
+                    break
+            except ValueError:
+                pass
             continue
         if r.status_code in (401, 403):
             raise RuntimeError(f"HTTP {r.status_code}: something in front of WordPress (WAF or security plugin) blocked the request")
@@ -397,7 +412,7 @@ def collect_one(session, site: dict, cfg: Config) -> tuple[dict, dict | None]:
     t0 = time.time()
     report = None
     if len(secret) < 32:
-        rec["error"] = f"no secret: set {site['secret_env']} in .env (at least 32 characters)"
+        rec["error"] = f"no secret: set {site['secret_env']} in config/plumb.env, then run docker compose up -d (at least 32 characters)"
     else:
         try:
             report = pull_site(session, site, secret, cfg.timeout)
@@ -440,7 +455,7 @@ class FakeWpOrg:
         return {"version": v} if v else None
 
 
-def run_demo(cfg: Config):
+def run_demo():
     rnd = random.Random(7)
     core_latest = "6.9.1"
     catalog = {
@@ -468,7 +483,7 @@ def run_demo(cfg: Config):
         p[i] -= 1
         return ".".join(map(str, p))
 
-    def comp(slug, name, latest, outdated, status="active", vendor_feed=True, wporg=True):
+    def comp(slug, name, latest, outdated, status="active", vendor_feed=True):
         ver = older(latest) if outdated else latest
         return {"slug": slug, "name": name, "version": ver, "status": status,
                 "update_version": latest if (outdated and vendor_feed) else None,
@@ -512,10 +527,10 @@ def run_demo(cfg: Config):
         }
         if idx == 2:  # one fully current site
             report["core"]["version"] = core_latest
-            for c in report["plugins"] + report["themes"]:
-                src = {**catalog, **premium, **themes}[c["slug"]]
-                c["version"], c["update_version"] = src[1], None
-                c["status"] = "active" if c in report["plugins"] else c["status"]
+            for c in report["plugins"]:
+                c["version"], c["update_version"], c["status"] = {**catalog, **premium}[c["slug"]][1], None, "active"
+            for c in report["themes"]:
+                c["version"], c["update_version"] = themes[c["slug"]][1], None
         out.append((rec, report))
     wp_plugins = {k: v[1] for k, v in catalog.items()}
     wp_themes = {k: v[1] for k, v in themes.items()}
@@ -572,7 +587,7 @@ def cmd_new_secret(name: str) -> int:
     secret = secrets.token_hex(32)
     var = f"PLUMB_SECRET_{re.sub(r'[^A-Za-z0-9]', '_', name).upper()}"
     print(f"\nSecret for site '{name}' (256-bit). Store it in two places, nowhere else:\n")
-    print(f"1) Plumb's .env:\n   {var}={secret}\n")
+    print(f"1) config/plumb.env on the Plumb computer (then run: docker compose up -d):\n   {var}={secret}\n")
     print(f"2) The site's wp-config.php, above \"That's all, stop editing\":\n   define( 'PLUMB_AGENT_SECRET', '{secret}' );\n")
     print(f"sites.json can leave secret_env out; it defaults to {var}.\n")
     return 0
@@ -580,7 +595,7 @@ def cmd_new_secret(name: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env-file", help="path to a KEY=VALUE config file (e.g. .env)")
+    ap.add_argument("--env-file", help="path to a KEY=VALUE config file (e.g. config/plumb.env)")
     ap.add_argument("--demo", action="store_true", help="generate a dashboard from fake data, no network")
     ap.add_argument("--new-secret", metavar="SITE", help="generate a secret for a site and print where it goes")
     ap.add_argument("--check", metavar="SITE", help="pull one site and print its evaluated result; writes nothing")
@@ -595,7 +610,7 @@ def main() -> int:
     started = dt.datetime.now(dt.timezone.utc)
 
     if args.demo:
-        pairs, core_latest, wporg = run_demo(cfg)
+        pairs, core_latest, wporg = run_demo()
     else:
         pairs, core_latest, wporg = run_live(cfg, only=args.check)
 

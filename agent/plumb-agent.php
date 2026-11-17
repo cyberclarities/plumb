@@ -218,10 +218,13 @@ final class Plumb_Agent {
 	}
 
 	private static function deny( $ip, $reason ) {
-		self::log_event( 'rejected', $ip, $reason );
 		$key   = self::fail_key( $ip );
-		$count = (int) get_site_transient( $key );
-		set_site_transient( $key, $count + 1, self::FAIL_WINDOW );
+		$count = (int) get_site_transient( $key ) + 1;
+		if ( $count >= self::FAIL_LIMIT ) {
+			$reason .= '; address now ignored for 15 minutes';
+		}
+		self::log_event( 'rejected', $ip, $reason );
+		set_site_transient( $key, $count, self::FAIL_WINDOW );
 		// Same answer WordPress gives for a route that doesn't exist.
 		return new WP_Error( 'rest_no_route', self::NOT_FOUND, array( 'status' => 404 ) );
 	}
@@ -242,6 +245,11 @@ final class Plumb_Agent {
 		$s  = self::settings();
 		$ip = self::client_ip( $s['ip_source'] );
 
+		// Checked first, and answered without logging: once an address is over the limit,
+		// further requests from it cost a read, never a database write.
+		if ( (int) get_site_transient( self::fail_key( $ip ) ) >= self::FAIL_LIMIT ) {
+			return new WP_Error( 'rest_no_route', self::NOT_FOUND, array( 'status' => 404 ) );
+		}
 		if ( ! empty( $s['require_https'] ) && ! is_ssl() ) {
 			return self::deny( $ip, 'not HTTPS' );
 		}
@@ -257,10 +265,6 @@ final class Plumb_Agent {
 				return self::deny( $ip, 'IP not on allowlist' );
 			}
 		}
-		if ( (int) get_site_transient( self::fail_key( $ip ) ) >= self::FAIL_LIMIT ) {
-			return self::deny( $ip, 'rate limited' );
-		}
-
 		list( $secret ) = self::secret();
 		if ( ! $secret ) {
 			return self::deny( $ip, 'no secret configured' );
@@ -537,7 +541,7 @@ final class Plumb_Agent {
 					<p><code style="font-size:13px;user-select:all"><?php echo esc_html( $show_secret ); ?></code></p>
 					<p>Better: move it out of the database. Add this line to <code>wp-config.php</code> above "That's all, stop editing":</p>
 					<p><code style="user-select:all">define( 'PLUMB_AGENT_SECRET', '<?php echo esc_html( $show_secret ); ?>' );</code></p>
-					<p>Put the same value in Plumb's <code>.env</code> under the variable named in that site's <code>secret_env</code>.</p>
+					<p>Put the same value in Plumb's <code>config/plumb.env</code> file, on the line for this site (<code>PLUMB_SECRET_</code> followed by the site's name in capitals), then run <code>docker compose up -d</code> on the Plumb computer.</p>
 				</div>
 			<?php endif; ?>
 
@@ -616,7 +620,7 @@ final class Plumb_Agent {
 
 			<?php if ( ! in_array( $source, array( 'constant', 'environment' ), true ) ) : ?>
 				<h2>Shared secret</h2>
-				<form method="post" action="<?php echo esc_url( self::form_action( 'plumb_agent_secret' ) ); ?>" onsubmit="return <?php echo 'none' === $source ? 'true' : "confirm('Rotating the secret breaks Plumb\\'s access until you update its .env. Continue?')"; ?>;">
+				<form method="post" action="<?php echo esc_url( self::form_action( 'plumb_agent_secret' ) ); ?>" onsubmit="return <?php echo 'none' === $source ? 'true' : "confirm('Rotating the secret breaks Plumb\\'s access until you update config/plumb.env on the Plumb computer. Continue?')"; ?>;">
 					<input type="hidden" name="action" value="plumb_agent_secret">
 					<?php wp_nonce_field( 'plumb_agent_secret' ); ?>
 					<p>Generates a new 256-bit secret, shows it once, and stores it in the database. Alternatively, generate one with <code>python3 collector.py --new-secret SITE_NAME</code> and put it in wp-config.php, which takes priority.</p>
