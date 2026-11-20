@@ -4,3 +4,6 @@ output/
 __pycache__/
 .venv/
 .DS_Store
+# Compose settings (see .env.example). Plumb's secrets are in config/plumb.env.
+.env
+!.env.example
